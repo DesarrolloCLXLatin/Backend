@@ -1,0 +1,838 @@
+// server/services/paymentGateway.js
+import axios from 'axios';
+import { parseStringPromise } from 'xml2js';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+
+// Cargar variables de entorno
+dotenv.config();
+
+class PaymentGatewayService {
+  constructor() {
+    // Configuración del gateway
+    this.baseURL = process.env.PAYMENT_GATEWAY_URL || 'https://paytest.megasoft.com.ve';
+    this.codAfiliacion = process.env.PAYMENT_COD_AFILIACION || '20250325';
+    this.username = process.env.PAYMENT_USERNAME || 'multimax';
+    this.password = process.env.PAYMENT_PASSWORD || 'Caracas123.1';
+    
+    // Crear autenticación Basic
+    this.authHeader = `Basic ${Buffer.from(`${this.username}:${this.password}`).toString('base64')}`;
+    
+    // Configuración de la carrera
+    this.racePriceUSD = parseFloat(process.env.RACE_PRICE_USD || '55.00');
+    
+    // Datos del comercio para P2C
+    this.commercePhone = process.env.COMMERCE_PHONE || '04141234567';
+    this.commerceBankCode = process.env.COMMERCE_BANK_CODE || '0138';
+    
+    // Inicializar Supabase solo si tenemos las credenciales
+    if (process.env.VITE_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      this.supabase = createClient(
+        process.env.VITE_SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      );
+    } else {
+      console.warn('Supabase no configurado en PaymentGatewayService - algunas funciones pueden no estar disponibles');
+      this.supabase = null;
+    }
+  }
+
+  // Crear XML request body
+  createXMLRequest(params) {
+    const xmlLines = ['<request>'];
+    
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        xmlLines.push(`    <${key}>${value}</${key}>`);
+      }
+    });
+    
+    xmlLines.push('</request>');
+    return xmlLines.join('\n');
+  }
+
+  // Parsear respuesta XML a JSON
+  async parseXMLResponse(xmlData) {
+    try {
+      const result = await parseStringPromise(xmlData, {
+        explicitArray: false,
+        ignoreAttrs: true,
+        trim: true
+      });
+      
+      return result.response || result;
+    } catch (error) {
+      console.error('Error parsing XML:', error);
+      console.error('XML recibido:', xmlData);
+      throw new Error('Error al procesar respuesta del gateway');
+    }
+  }
+
+  // Obtener tasa de cambio actual desde Supabase
+  async getCurrentExchangeRate() {
+    try {
+      if (this.supabase) {
+        const { data: currentRate } = await this.supabase
+          .from('exchange_rates')
+          .select('rate')
+          .order('date', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (currentRate) {
+          return currentRate.rate;
+        }
+      }
+
+      // Si no hay tasa en BD, usar una por defecto o lanzar error
+      console.warn('No se pudo obtener tasa de cambio de la BD');
+      return 36.50; // Tasa por defecto
+      
+    } catch (error) {
+      console.error('Error obteniendo tasa de cambio:', error);
+      return 36.50; // Tasa por defecto en caso de error
+    }
+  }
+
+  // Convertir USD a Bolívares
+  async convertUSDtoBs(amountUSD) {
+    const exchangeRate = await this.getCurrentExchangeRate();
+    const amountBs = amountUSD * exchangeRate;
+    return {
+      amountBs: Math.round(amountBs * 100) / 100, // Redondear a 2 decimales
+      exchangeRate: exchangeRate
+    };
+  }
+
+  // Preregistro - obtener número de control
+  async preregister() {
+    try {
+      console.log('Iniciando preregistro...');
+      
+      const xmlBody = this.createXMLRequest({
+        cod_afiliacion: this.codAfiliacion
+      });
+      
+      console.log('Request XML:', xmlBody);
+
+      const response = await axios.post(
+        `${this.baseURL}/payment/action/v2-preregistro`,
+        xmlBody,
+        {
+          headers: {
+            'Authorization': this.authHeader,
+            'Content-Type': 'text/xml'
+          },
+          timeout: 30000
+        }
+      );
+
+      console.log('Response status:', response.status);
+      console.log('Response data:', response.data);
+
+      const result = await this.parseXMLResponse(response.data);
+      
+      if (result.codigo === '00' && result.control) {
+        console.log('Preregistro exitoso:', result.control);
+        return {
+          success: true,
+          control: result.control,
+          descripcion: result.descripcion
+        };
+      } else {
+        throw new Error(result.descripcion || 'Error en preregistro');
+      }
+    } catch (error) {
+      console.error('Error en preregistro:', error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
+      throw error;
+    }
+  }
+
+  // Pago móvil P2C (Persona a Comercio) - VERSIÓN CORREGIDA
+  async processPaymentP2C(paymentData) {
+    try {
+      // Validar datos
+      this.validateP2CData(paymentData);
+      
+      console.log('Procesando pago P2C:', {
+        control: paymentData.control,
+        factura: paymentData.factura,
+        amount: paymentData.amount,
+        telefonoCliente: paymentData.telefonoCliente,
+        codigobancoCliente: paymentData.codigobancoCliente
+      });
+
+      // MODO DE PRUEBA LOCAL
+      if (process.env.PAYMENT_TEST_MODE === 'true' && process.env.NODE_ENV !== 'production') {
+        console.log('🧪 MODO DE PRUEBA ACTIVADO');
+        
+        const testPhone = process.env.PAYMENT_TEST_PHONE || '04125555444';
+        const testBank = process.env.PAYMENT_TEST_BANK || '0102';
+        
+        // Simular delay de procesamiento
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        if (paymentData.telefonoCliente === testPhone && paymentData.codigobancoCliente === testBank) {
+          const testReference = Date.now().toString().slice(-8);
+          return {
+            success: true,
+            codigo: '00',
+            descripcion: 'PAGO APROBADO (MODO PRUEBA)',
+            authid: `TEST${Date.now().toString().slice(-6)}`,
+            referencia: testReference,
+            seqnum: '000001',
+            voucher: this.generateTestVoucher({
+              ...paymentData,
+              referencia: testReference
+            }),
+            vtid: 'TEST001',
+            terminal: 'TESTTERM',
+            lote: '001',
+            afiliacion: this.codAfiliacion
+          };
+        } else {
+          return {
+            success: false,
+            codigo: 'R1',
+            descripcion: `Datos de prueba inválidos. Use teléfono: ${testPhone} y banco: ${testBank}`,
+            authid: '',
+            referencia: '',
+            seqnum: '',
+            voucher: '',
+            vtid: '',
+            terminal: '',
+            lote: '',
+            afiliacion: ''
+          };
+        }
+      }
+
+      // Formatear teléfonos
+      const telefonoCliente = this.formatPhoneNumber(paymentData.telefonoCliente);
+      const telefonoComercio = this.formatPhoneNumber(paymentData.telefonoComercio || this.commercePhone);
+
+      // IMPORTANTE: Construir XML exactamente como en Postman (sin campos adicionales)
+      const xmlBody = this.createXMLRequest({
+        cod_afiliacion: this.codAfiliacion,
+        control: paymentData.control,
+        telefonoCliente: telefonoCliente,
+        codigobancoCliente: paymentData.codigobancoCliente,
+        telefonoComercio: telefonoComercio,
+        codigobancoComercio: paymentData.codigobancoComercio || this.commerceBankCode,
+        amount: parseFloat(paymentData.amount).toFixed(2),
+        factura: paymentData.factura
+        // NO incluir: tipoPago, cid, referencia
+      });
+
+      console.log('Request XML:', xmlBody);
+
+      const response = await axios.post(
+        `${this.baseURL}/payment/action/v2-procesar-compra-p2c`,
+        xmlBody,
+        {
+          headers: {
+            'Authorization': this.authHeader,
+            'Content-Type': 'text/xml'
+          },
+          timeout: 60000 // 60 segundos para pagos
+        }
+      );
+
+      console.log('Response status:', response.status);
+      console.log('Response data:', response.data);
+
+      const result = await this.parseXMLResponse(response.data);
+      
+      // Procesar voucher si existe
+      let voucherText = '';
+      if (result.voucher) {
+        if (typeof result.voucher === 'object' && result.voucher.linea) {
+          // Si el voucher viene como objeto con líneas
+          const lines = Array.isArray(result.voucher.linea) 
+            ? result.voucher.linea 
+            : [result.voucher.linea];
+          voucherText = lines.join('\n');
+        } else {
+          voucherText = result.voucher;
+        }
+      }
+
+      const paymentResult = {
+        success: result.codigo === '00',
+        codigo: result.codigo,
+        descripcion: result.descripcion,
+        authid: result.authid || '',
+        referencia: result.referencia || '',
+        seqnum: result.seqnum || '',
+        voucher: voucherText,
+        vtid: result.vtid || '',
+        terminal: result.terminal || '',
+        lote: result.lote || '',
+        afiliacion: result.afiliacion || ''
+      };
+
+      console.log('Resultado pago P2C:', {
+        codigo: paymentResult.codigo,
+        descripcion: paymentResult.descripcion,
+        referencia: paymentResult.referencia
+      });
+
+      return paymentResult;
+    } catch (error) {
+      console.error('Error en pago P2C:', error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
+      throw error;
+    }
+  }
+
+  // Pago móvil P2C Multi-Moneda (método separado)
+  async processPaymentP2CMultiMoneda(paymentData) {
+    try {
+      // Validar datos
+      this.validateP2CData(paymentData);
+      
+      console.log('Procesando pago P2C Multi-Moneda:', {
+        control: paymentData.control,
+        factura: paymentData.factura,
+        amount: paymentData.amount,
+        tipoPago: paymentData.tipoPago
+      });
+
+      // Formatear teléfonos
+      const telefonoCliente = this.formatPhoneNumber(paymentData.telefonoCliente);
+      const telefonoComercio = this.formatPhoneNumber(paymentData.telefonoComercio || this.commercePhone);
+
+      // Para multi-moneda SÍ incluimos tipoPago y referencia
+      const xmlBody = this.createXMLRequest({
+        cod_afiliacion: this.codAfiliacion,
+        control: paymentData.control,
+        telefonoCliente: telefonoCliente,
+        codigobancoCliente: paymentData.codigobancoCliente,
+        telefonoComercio: telefonoComercio,
+        codigobancoComercio: paymentData.codigobancoComercio || this.commerceBankCode,
+        tipoPago: paymentData.tipoPago || '90', // 90 para multi-moneda
+        referencia: paymentData.referencia,
+        amount: parseFloat(paymentData.amount).toFixed(2),
+        factura: paymentData.factura
+      });
+
+      console.log('Request XML Multi-Moneda:', xmlBody);
+
+      const response = await axios.post(
+        `${this.baseURL}/payment/action/v2-procesar-compra-p2c`,
+        xmlBody,
+        {
+          headers: {
+            'Authorization': this.authHeader,
+            'Content-Type': 'text/xml'
+          },
+          timeout: 60000
+        }
+      );
+
+      const result = await this.parseXMLResponse(response.data);
+      
+      return {
+        success: result.codigo === '00',
+        codigo: result.codigo,
+        descripcion: result.descripcion,
+        authid: result.authid || '',
+        referencia: result.referencia || '',
+        seqnum: result.seqnum || '',
+        voucher: result.voucher || '',
+        vtid: result.vtid || '',
+        terminal: result.terminal || '',
+        lote: result.lote || '',
+        afiliacion: result.afiliacion || ''
+      };
+    } catch (error) {
+      console.error('Error en pago P2C Multi-Moneda:', error.message);
+      throw error;
+    }
+  }
+
+  // Consultar estado de transacción
+  async queryStatus(control, version = '3', tipotrx = 'P2C') {
+    try {
+      console.log('Consultando estado:', { control, version, tipotrx });
+
+      const xmlBody = this.createXMLRequest({
+        cod_afiliacion: this.codAfiliacion,
+        control: control,
+        version: version,
+        tipotrx: tipotrx
+      });
+
+      const response = await axios.post(
+        `${this.baseURL}/payment/action/v2-querystatus`,
+        xmlBody,
+        {
+          headers: {
+            'Authorization': this.authHeader,
+            'Content-Type': 'text/xml'
+          },
+          timeout: 30000
+        }
+      );
+
+      const result = await this.parseXMLResponse(response.data);
+      
+      return {
+        success: result.codigo === '00',
+        estado: result.estado, // A=Aprobada, R=Rechazada, P=Pendiente
+        codigo: result.codigo,
+        descripcion: result.descripcion,
+        monto: result.monto,
+        referencia: result.referencia,
+        factura: result.factura,
+        authid: result.authid,
+        terminal: result.terminal,
+        vtid: result.vtid,
+        control: result.control
+      };
+    } catch (error) {
+      console.error('Error consultando estado:', error.message);
+      throw error;
+    }
+  }
+
+  // Proceso completo de pago P2C - VERSIÓN CORREGIDA
+  async executeP2CPaymentFlow(runnerId, paymentData, supabaseInstance = null) {
+    const startTime = Date.now();
+    let transaction = null;
+    
+    // Usar la instancia de Supabase proporcionada o la del servicio
+    const supabase = supabaseInstance || this.supabase;
+    
+    if (!supabase) {
+      throw new Error('No hay conexión a Supabase disponible');
+    }
+    
+    try {
+      console.log('=== Iniciando flujo de pago P2C ===');
+      
+      // 1. Obtener runner
+      const { data: runner, error: runnerError } = await supabase
+        .from('runners')
+        .select('*')
+        .eq('id', runnerId)
+        .single();
+
+      if (runnerError || !runner) {
+        throw new Error('Corredor no encontrado');
+      }
+
+      // 2. Convertir precio a bolívares
+      const { amountBs, exchangeRate } = await this.convertUSDtoBs(this.racePriceUSD);
+      console.log(`Conversión: $${this.racePriceUSD} USD = Bs. ${amountBs} (Tasa: ${exchangeRate})`);
+
+      // 3. Generar número de factura única
+      const factura = `RUN${Date.now()}`;
+
+      // 4. Preregistrar transacción
+      const preregResult = await this.preregister();
+      if (!preregResult.success) {
+        throw new Error('Error en preregistro');
+      }
+
+      // 5. Crear registro de transacción en BD
+      const { data: newTransaction, error: transError } = await supabase
+        .from('payment_transactions')
+        .insert({
+          runner_id: runnerId,
+          control: preregResult.control,
+          invoice: factura,
+          amount_usd: this.racePriceUSD,
+          amount_bs: amountBs,
+          exchange_rate: exchangeRate,
+          payment_method: 'pago_movil_p2c',
+          status: 'pending',
+          client_phone: paymentData.telefonoCliente,
+          client_bank_code: paymentData.codigobancoCliente,
+          client_identification: paymentData.cid || runner.identification || 'V00000000',
+          commerce_phone: this.commercePhone,
+          commerce_bank_code: this.commerceBankCode,
+          reference: null // Se actualizará después si el gateway la genera
+        })
+        .select()
+        .single();
+
+      if (transError) {
+        throw new Error('Error creando transacción: ' + transError.message);
+      }
+
+      transaction = newTransaction;
+
+      // 6. Actualizar estado del runner
+      await supabase
+        .from('runners')
+        .update({ payment_status: 'procesando' })
+        .eq('id', runnerId);
+
+      // 7. Ejecutar pago P2C - SIN campos adicionales
+      const paymentResult = await this.processPaymentP2C({
+        control: preregResult.control,
+        factura: factura,
+        amount: amountBs,
+        telefonoCliente: paymentData.telefonoCliente,
+        codigobancoCliente: paymentData.codigobancoCliente,
+        telefonoComercio: this.commercePhone,
+        codigobancoComercio: this.commerceBankCode
+        // NO enviar: cid, referencia, tipoPago
+      });
+
+      // 8. Actualizar transacción con resultado
+      const updateData = {
+        status: paymentResult.success ? 'approved' : 'failed',
+        gateway_response: paymentResult,
+        auth_id: paymentResult.authid,
+        reference: paymentResult.referencia || null,
+        terminal: paymentResult.terminal,
+        lote: paymentResult.lote,
+        seqnum: paymentResult.seqnum,
+        voucher: paymentResult.voucher,
+        gateway_code: paymentResult.codigo,
+        gateway_description: paymentResult.descripcion,
+        processed_at: new Date().toISOString()
+      };
+
+      await supabase
+        .from('payment_transactions')
+        .update(updateData)
+        .eq('id', transaction.id);
+
+      // 9. Si el pago fue exitoso, confirmar corredor
+      if (paymentResult.success) {
+        // Llamar función de confirmación
+        const { data: confirmResult, error: confirmError } = await supabase
+          .rpc('confirm_p2c_payment', {
+            p_transaction_id: transaction.id,
+            p_auth_id: paymentResult.authid,
+            p_reference: paymentResult.referencia || null,
+            p_voucher: paymentResult.voucher
+          });
+
+        if (confirmError) {
+          console.error('Error confirmando pago:', confirmError);
+        }
+
+        console.log('Pago confirmado exitosamente');
+      } else {
+        // Actualizar estado del runner a rechazado
+        await supabase
+          .from('runners')
+          .update({ payment_status: 'rechazado' })
+          .eq('id', runnerId);
+
+        // Liberar inventario si estaba reservado
+        await supabase
+          .rpc('release_inventory', {
+            size: runner.shirt_size,
+            quantity: 1
+          });
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`=== Flujo completado en ${duration}ms ===`);
+
+      return {
+        success: paymentResult.success,
+        transactionId: transaction.id,
+        control: preregResult.control,
+        invoice: factura,
+        amountUSD: this.racePriceUSD,
+        amountBs: amountBs,
+        exchangeRate: exchangeRate,
+        voucher: paymentResult.voucher,
+        reference: paymentResult.referencia || null,
+        authId: paymentResult.authid,
+        message: paymentResult.descripcion
+      };
+
+    } catch (error) {
+      console.error('Error en flujo de pago:', error);
+      
+      // Registrar error
+      if (transaction) {
+        await supabase
+          .from('payment_errors')
+          .insert({
+            runner_id: runnerId,
+            transaction_id: transaction.id,
+            error_code: error.code || 'UNKNOWN',
+            error_message: error.message,
+            error_details: {
+              stack: error.stack,
+              response: error.response?.data
+            }
+          });
+
+        // Actualizar transacción como fallida
+        await supabase
+          .from('payment_transactions')
+          .update({
+            status: 'failed',
+            gateway_response: { error: error.message }
+          })
+          .eq('id', transaction.id);
+      }
+
+      // Actualizar estado del runner
+      if (supabase && runnerId) {
+        await supabase
+          .from('runners')
+          .update({ payment_status: 'rechazado' })
+          .eq('id', runnerId);
+      }
+
+      throw error;
+    }
+  }
+
+  // Formatear número de teléfono
+  formatPhoneNumber(phone) {
+    // Remover todos los caracteres no numéricos
+    let cleaned = phone.replace(/[^0-9]/g, '');
+    
+    // Si no empieza con 0, agregarlo
+    if (!cleaned.startsWith('0')) {
+      cleaned = '0' + cleaned;
+    }
+    
+    // Validar formato venezolano (04XX XXX XXXX)
+    if (!/^04[0-9]{9}$/.test(cleaned)) {
+      throw new Error(`Formato de teléfono inválido: ${phone}. Debe ser 04XXXXXXXXX`);
+    }
+    
+    return cleaned;
+  }
+
+  // Formatear cédula de identidad
+  formatCID(cid) {
+    if (!cid) {
+      return 'V00000000';
+    }
+
+    // Remover espacios y guiones
+    let cleaned = cid.replace(/[\s-]/g, '').toUpperCase();
+    
+    // Si es solo números, agregar V al inicio
+    if (/^\d+$/.test(cleaned)) {
+      cleaned = 'V' + cleaned;
+    }
+    
+    // Validar formato: Letra seguida de números
+    if (!/^[VEJGP]\d{6,9}$/.test(cleaned)) {
+      console.warn(`Formato de cédula inválido: ${cid}. Usando valor por defecto.`);
+      return 'V00000000';
+    }
+    
+    return cleaned;
+  }
+
+  // Generar referencia única
+  generateUniqueReference() {
+    // Generar referencia de 8 dígitos basada en timestamp
+    const timestamp = Date.now().toString();
+    return timestamp.slice(-8);
+  }
+
+  // Generar voucher de prueba
+  generateTestVoucher(paymentData) {
+    const fecha = new Date().toLocaleDateString('es-VE');
+    const hora = new Date().toLocaleTimeString('es-VE');
+    
+    return `
+=====================================
+       COMPROBANTE DE PAGO
+          (MODO PRUEBA)
+=====================================
+Fecha: ${fecha}
+Hora: ${hora}
+-------------------------------------
+Comercio: MULTIMAX STORE SPORTS
+Afiliación: ${this.codAfiliacion}
+-------------------------------------
+PAGO MOVIL P2C
+Banco Origen: ${paymentData.codigobancoCliente}
+Teléfono: ${paymentData.telefonoCliente}
+Banco Destino: ${this.commerceBankCode}
+Teléfono Comercio: ${this.commercePhone}
+-------------------------------------
+Monto: Bs. ${parseFloat(paymentData.amount).toFixed(2)}
+Referencia: ${paymentData.referencia}
+Control: ${paymentData.control}
+Factura: ${paymentData.factura}
+-------------------------------------
+        TRANSACCION APROBADA
+           MODO PRUEBA
+=====================================`;
+  }
+
+  // Validar datos P2C
+  validateP2CData(paymentData) {
+    const errors = [];
+    
+    if (!paymentData.control) errors.push('Control es requerido');
+    if (!paymentData.telefonoCliente) errors.push('Teléfono del cliente es requerido');
+    if (!paymentData.codigobancoCliente) errors.push('Banco del cliente es requerido');
+    if (!paymentData.amount || paymentData.amount <= 0) errors.push('Monto debe ser mayor a 0');
+    if (!paymentData.factura) errors.push('Número de factura es requerido');
+    
+    // Validar códigos de banco
+    const validBankCodes = ['0102', '0104', '0105', '0108', '0114', '0115', '0116', '0128', 
+                            '0134', '0137', '0138', '0146', '0151', '0156', '0157', '0163', 
+                            '0166', '0168', '0169', '0171', '0172', '0173', '0174', '0175', 
+                            '0176', '0177', '0191'];
+    
+    if (!validBankCodes.includes(paymentData.codigobancoCliente)) {
+      errors.push(`Código de banco cliente inválido: ${paymentData.codigobancoCliente}`);
+    }
+    
+    if (errors.length > 0) {
+      throw new Error(`Validación fallida: ${errors.join(', ')}`);
+    }
+    
+    return true;
+  }
+
+  // Obtener lista de bancos
+  async getBankList() {
+    try {
+      // Primero intentar obtener de la base de datos si existe una tabla de bancos
+      if (this.supabase) {
+        try {
+          const { data: banks, error } = await this.supabase
+            .from('banks')
+            .select('code, name, short_name, is_active')
+            .eq('is_active', true)
+            .order('name');
+          
+          if (!error && banks && banks.length > 0) {
+            return banks;
+          }
+        } catch (dbError) {
+          console.log('No se pudo obtener bancos de la BD, usando lista estática');
+        }
+      }
+
+      // Si no hay BD o falla, devolver lista estática
+      return [
+        { code: '0102', name: 'Banco de Venezuela', short_name: 'VENEZUELA', is_active: true },
+        { code: '0134', name: 'Banesco', short_name: 'BANESCO', is_active: true },
+        { code: '0105', name: 'Banco Mercantil', short_name: 'MERCANTIL', is_active: true },
+        { code: '0108', name: 'Banco Provincial', short_name: 'PROVINCIAL', is_active: true },
+        { code: '0116', name: 'Banco Occidental de Descuento', short_name: 'BOD', is_active: true },
+        { code: '0114', name: 'Bancaribe', short_name: 'BANCARIBE', is_active: true },
+        { code: '0115', name: 'Banco Exterior', short_name: 'EXTERIOR', is_active: true },
+        { code: '0175', name: 'Banco Bicentenario', short_name: 'BICENTENARIO', is_active: true },
+        { code: '0163', name: 'Banco del Tesoro', short_name: 'TESORO', is_active: true },
+        { code: '0191', name: 'Banco Nacional de Crédito', short_name: 'BNC', is_active: true },
+        { code: '0138', name: 'Banco Plaza', short_name: 'PLAZA', is_active: true },
+        { code: '0174', name: 'Banplus', short_name: 'BANPLUS', is_active: true },
+        { code: '0172', name: 'Bancamiga', short_name: 'BANCAMIGA', is_active: true },
+        { code: '0169', name: 'Mi Banco', short_name: 'MIBANCO', is_active: true },
+        { code: '0171', name: 'Banco Activo', short_name: 'ACTIVO', is_active: true },
+        { code: '0168', name: 'Bancrecer', short_name: 'BANCRECER', is_active: true },
+        { code: '0137', name: 'Sofitasa', short_name: 'SOFITASA', is_active: true },
+        { code: '0177', name: 'BBVA Provincial', short_name: 'BBVA', is_active: true },
+        { code: '0104', name: 'Venezolano de Crédito', short_name: 'BVC', is_active: true },
+        { code: '0173', name: 'Banco Internacional de Desarrollo', short_name: 'BID', is_active: true }
+      ].sort((a, b) => a.name.localeCompare(b.name));
+      
+    } catch (error) {
+      console.error('Error obteniendo lista de bancos:', error);
+      throw error;
+    }
+  }
+
+  // Método para testing
+  async testConnection() {
+    try {
+      console.log('Probando conexión al gateway...');
+      console.log('URL:', this.baseURL);
+      console.log('Afiliación:', this.codAfiliacion);
+      console.log('Auth Header:', this.authHeader.substring(0, 20) + '...');
+      
+      // Intentar un preregistro de prueba
+      const result = await this.preregister();
+      
+      console.log('Conexión exitosa:', result);
+      return {
+        success: true,
+        message: 'Conexión al gateway exitosa',
+        control: result.control
+      };
+    } catch (error) {
+      console.error('Error en test de conexión:', error.message);
+      return {
+        success: false,
+        message: error.message,
+        details: error.response?.data
+      };
+    }
+  }
+
+  // Test de pago P2C completo - VERSIÓN CORREGIDA
+  async testP2CPayment() {
+    try {
+      console.log('=== Iniciando test de pago P2C ===');
+      
+      // 1. Preregistro
+      const preregResult = await this.preregister();
+      console.log('1. Preregistro:', preregResult);
+      
+      if (!preregResult.success) {
+        throw new Error('Preregistro falló');
+      }
+      
+      // 2. Datos de prueba - SIN campos adicionales
+      const testData = {
+        control: preregResult.control,
+        factura: `TEST${Date.now()}`,
+        amount: 1000.00, // Bs. 1000 para prueba
+        telefonoCliente: '04125555444', // Teléfono de prueba de la documentación
+        codigobancoCliente: '0102', // Banco de Venezuela
+        telefonoComercio: this.commercePhone,
+        codigobancoComercio: this.commerceBankCode
+        // NO incluir: cid, referencia, tipoPago
+      };
+      
+      console.log('2. Ejecutando pago con datos:', testData);
+      
+      // 3. Procesar pago
+      const paymentResult = await this.processPaymentP2C(testData);
+      console.log('3. Resultado del pago:', paymentResult);
+      
+      // 4. Consultar estado
+      const statusResult = await this.queryStatus(preregResult.control);
+      console.log('4. Estado de la transacción:', statusResult);
+      
+      return {
+        success: paymentResult.success,
+        preregistro: preregResult,
+        pago: paymentResult,
+        estado: statusResult
+      };
+      
+    } catch (error) {
+      console.error('Error en test P2C:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        details: error.response?.data
+      };
+    }
+  }
+}
+
+// Exportar instancia única
+const paymentGateway = new PaymentGatewayService();
+export default paymentGateway;
