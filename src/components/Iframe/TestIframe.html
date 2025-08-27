@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>iFrame Testing Tool - Ticket Payment</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .panel {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        
+        h1 {
+            grid-column: 1 / -1;
+            margin-bottom: 20px;
+            color: #333;
+        }
+        
+        h2 {
+            margin-bottom: 15px;
+            color: #555;
+            font-size: 1.2em;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #666;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        textarea {
+            min-height: 100px;
+            font-family: monospace;
+        }
+        
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        
+        button:hover {
+            background: #2563eb;
+        }
+        
+        button.secondary {
+            background: #6b7280;
+        }
+        
+        button.secondary:hover {
+            background: #4b5563;
+        }
+        
+        .iframe-container {
+            width: 100%;
+            height: 600px;
+            border: 2px dashed #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        #testIframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        
+        .console {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .console-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-left: 3px solid transparent;
+        }
+        
+        .console-entry.info {
+            border-left-color: #3b82f6;
+        }
+        
+        .console-entry.success {
+            border-left-color: #10b981;
+        }
+        
+        .console-entry.error {
+            border-left-color: #ef4444;
+        }
+        
+        .console-entry.message {
+            border-left-color: #f59e0b;
+        }
+        
+        .timestamp {
+            color: #94a3b8;
+            margin-right: 10px;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        
+        .status-indicator.connected {
+            background: #10b981;
+        }
+        
+        .status-indicator.disconnected {
+            background: #ef4444;
+        }
+        
+        .test-scenarios {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .scenario-button {
+            background: #f3f4f6;
+            color: #374151;
+            border: 1px solid #e5e7eb;
+            padding: 8px 12px;
+            text-align: left;
+            font-size: 13px;
+        }
+        
+        .scenario-button:hover {
+            background: #e5e7eb;
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .metric {
+            background: #f9fafb;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1f2937;
+        }
+        
+        .metric-label {
+            font-size: 12px;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 iFrame Testing Tool - Sistema de Pagos</h1>
+        
+        <!-- Panel de Configuración -->
+        <div class="panel">
+            <h2>⚙️ Configuración</h2>
+            
+            <div class="form-group">
+                <label>URL del iFrame</label>
+                <input type="text" id="iframeUrl" value="http://localhost:3000/ticket-purchase" />
+            </div>
+            
+            <div class="form-group">
+                <label>Token de Acceso</label>
+                <input type="text" id="iframeToken" placeholder="Ingrese el token generado" />
+            </div>
+            
+            <div class="form-group">
+                <label>Dominio de Origen (para postMessage)</label>
+                <input type="text" id="targetOrigin" value="http://localhost:3000" />
+            </div>
+            
+            <button onclick="loadIframe()">Cargar iFrame</button>
+            <button onclick="reloadIframe()" class="secondary">Recargar</button>
+            <button onclick="clearConsole()" class="secondary">Limpiar Consola</button>
+            
+            <h3 style="margin-top: 20px;">📋 Escenarios de Prueba</h3>
+            <div class="test-scenarios">
+                <button class="scenario-button" onclick="testScenario('valid')">
+                    ✅ Compra Exitosa
+                </button>
+                <button class="scenario-button" onclick="testScenario('invalid_phone')">
+                    ❌ Teléfono Inválido
+                </button>
+                <button class="scenario-button" onclick="testScenario('expired_token')">
+                    ⏰ Token Expirado
+                </button>
+                <button class="scenario-button" onclick="testScenario('network_error')">
+                    🌐 Error de Red
+                </button>
+                <button class="scenario-button" onclick="testScenario('duplicate_ref')">
+                    🔄 Referencia Duplicada
+                </button>
+                <button class="scenario-button" onclick="testScenario('max_tickets')">
+                    🎫 Máximo de Tickets
+                </button>
+            </div>
+            
+            <h3 style="margin-top: 20px;">📊 Métricas</h3>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-value" id="loadTime">0</div>
+                    <div class="metric-label">Tiempo de Carga (ms)</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="messageCount">0</div>
+                    <div class="metric-label">Mensajes Recibidos</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="errorCount">0</div>
+                    <div class="metric-label">Errores</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Panel del iFrame -->
+        <div class="panel">
+            <h2>
+                <span class="status-indicator disconnected" id="statusIndicator"></span>
+                iFrame de Compra
+            </h2>
+            <div class="iframe-container" id="iframeContainer">
+                <p style="text-align: center; margin-top: 250px; color: #999;">
+                    Configure y haga clic en "Cargar iFrame" para comenzar
+                </p>
+            </div>
+        </div>
+        
+        <!-- Panel de Comunicación -->
+        <div class="panel">
+            <h2>📨 Enviar Mensaje al iFrame</h2>
+            
+            <div class="form-group">
+                <label>Tipo de Mensaje</label>
+                <select id="messageType">
+                    <option value="reset_form">Resetear Formulario</option>
+                    <option value="update_config">Actualizar Configuración</option>
+                    <option value="get_status">Obtener Estado</option>
+                    <option value="custom">Personalizado</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Payload (JSON)</label>
+                <textarea id="messagePayload">{
+  "key": "value"
+}</textarea>
+            </div>
+            
+            <button onclick="sendMessage()">Enviar Mensaje</button>
+            
+            <h3 style="margin-top: 20px;">🔧 Comandos Rápidos</h3>
+            <button onclick="fillTestData()">Llenar Datos de Prueba</button>
+            <button onclick="simulatePayment()">Simular Pago</button>
+            <button onclick="getIframeHeight()">Obtener Altura</button>
+        </div>
+        
+        <!-- Consola -->
+        <div class="panel">
+            <h2>📜 Consola de Eventos</h2>
+            <div class="console" id="console">
+                <div class="console-entry info">
+                    <span class="timestamp">[00:00:00]</span>
+                    Sistema de pruebas iniciado
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let iframe = null;
+        let startTime = null;
+        let messageCounter = 0;
+        let errorCounter = 0;
+        
+        // Logging
+        function log(message, type = 'info') {
+            const console = document.getElementById('console');
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `console-entry ${type}`;
+            entry.innerHTML = `<span class="timestamp">[${timestamp}]</span>${message}`;
+            console.appendChild(entry);
+            console.scrollTop = console.scrollHeight;
+            
+            if (type === 'error') {
+                errorCounter++;
+                document.getElementById('errorCount').textContent = errorCounter;
+            }
+        }
+        
+        // Cargar iframe
+        function loadIframe() {
+            const url = document.getElementById('iframeUrl').value;
+            const token = document.getElementById('iframeToken').value;
+            
+            if (!token) {
+                log('Error: Token requerido', 'error');
+                return;
+            }
+            
+            startTime = Date.now();
+            const container = document.getElementById('iframeContainer');
+            container.innerHTML = `<iframe id="testIframe" src="${url}?token=${token}"></iframe>`;
+            
+            iframe = document.getElementById('testIframe');
+            iframe.onload = function() {
+                const loadTime = Date.now() - startTime;
+                document.getElementById('loadTime').textContent = loadTime;
+                document.getElementById('statusIndicator').className = 'status-indicator connected';
+                log(`iFrame cargado en ${loadTime}ms`, 'success');
+            };
+            
+            log('Cargando iFrame...', 'info');
+        }
+        
+        function reloadIframe() {
+            if (iframe) {
+                iframe.contentWindow.location.reload();
+                log('iFrame recargado', 'info');
+            }
+        }
+        
+        function clearConsole() {
+            const console = document.getElementById('console');
+            console.innerHTML = '<div class="console-entry info"><span class="timestamp">[' + 
+                new Date().toLocaleTimeString() + ']</span>Consola limpiada</div>';
+            messageCounter = 0;
+            errorCounter = 0;
+            document.getElementById('messageCount').textContent = '0';
+            document.getElementById('errorCount').textContent = '0';
+        }
+        
+        // Escuchar mensajes del iframe
+        window.addEventListener('message', function(event) {
+            messageCounter++;
+            document.getElementById('messageCount').textContent = messageCounter;
+            
+            const origin = event.origin;
+            const data = event.data;
+            
+            log(`Mensaje recibido de ${origin}: ${JSON.stringify(data, null, 2)}`, 'message');
+            
+            // Manejar tipos específicos de mensajes
+            if (data.type === 'payment_completed') {
+                log('¡Pago completado! ID: ' + data.transactionId, 'success');
+            } else if (data.type === 'payment_error') {
+                log('Error en el pago: ' + data.message, 'error');
+            } else if (data.type === 'iframe_ready') {
+                log('iFrame listo y operativo', 'success');
+            } else if (data.type === 'resize') {
+                log(`Cambio de tamaño solicitado: ${data.height}px`, 'info');
+            }
+        });
+        
+        // Enviar mensaje al iframe
+        function sendMessage() {
+            if (!iframe) {
+                log('Error: iFrame no cargado', 'error');
+                return;
+            }
+            
+            const type = document.getElementById('messageType').value;
+            const payloadText = document.getElementById('messagePayload').value;
+            const targetOrigin = document.getElementById('targetOrigin').value;
+            
+            try {
+                const payload = JSON.parse(payloadText);
+                const message = { type, ...payload };
+                
+                iframe.contentWindow.postMessage(message, targetOrigin);
+                log(`Mensaje enviado: ${JSON.stringify(message)}`, 'info');
+            } catch (e) {
+                log('Error: JSON inválido en el payload', 'error');
+            }
+        }
+        
+        // Escenarios de prueba
+        function testScenario(scenario) {
+            log(`Ejecutando escenario: ${scenario}`, 'info');
+            
+            switch(scenario) {
+                case 'valid':
+                    fillTestData();
+                    setTimeout(() => simulatePayment(), 1000);
+                    break;
+                    
+                case 'invalid_phone':
+                    sendTestMessage({
+                        type: 'fill_form',
+                        data: {
+                            client_phone: '123456', // Formato inválido
+                            client_bank_code: '0134'
+                        }
+                    });
+                    break;
+                    
+                case 'expired_token':
+                    // Simular token expirado cambiando el token
+                    document.getElementById('iframeToken').value = 'expired-token-123';
+                    reloadIframe();
+                    break;
+                    
+                case 'network_error':
+                    // Simular error de red
+                    log('Simulando error de red...', 'info');
+                    // Aquí podrías interceptar las llamadas fetch si tienes control sobre el iframe
+                    break;
+                    
+                case 'duplicate_ref':
+                    sendTestMessage({
+                        type: 'set_reference',
+                        reference: '123456' // Referencia que ya existe
+                    });
+                    break;
+                    
+                case 'max_tickets':
+                    // Intentar agregar más de 10 tickets
+                    sendTestMessage({
+                        type: 'add_tickets',
+                        count: 15
+                    });
+                    break;
+            }
+        }
+        
+        function sendTestMessage(message) {
+            const targetOrigin = document.getElementById('targetOrigin').value;
+            if (iframe) {
+                iframe.contentWindow.postMessage(message, targetOrigin);
+            }
+        }
+        
+        // Comandos rápidos
+        function fillTestData() {
+            sendTestMessage({
+                type: 'fill_form',
+                data: {
+                    tickets: [{
+                        buyer_name: 'Juan Pérez',
+                        buyer_email: 'juan@test.com',
+                        buyer_phone: '0412-1234567',
+                        buyer_identification: 'V-12345678'
+                    }],
+                    client_phone: '04121234567',
+                    client_bank_code: '0134'
+                }
+            });
+            log('Datos de prueba enviados', 'info');
+        }
+        
+        function simulatePayment() {
+            sendTestMessage({
+                type: 'simulate_payment',
+                reference: Math.floor(Math.random() * 1000000).toString()
+            });
+            log('Simulación de pago iniciada', 'info');
+        }
+        
+        function getIframeHeight() {
+            sendTestMessage({ type: 'get_height' });
+            log('Solicitando altura del iframe', 'info');
+        }
+        
+        // Auto-cargar si hay token en URL
+        window.onload = function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+            if (token) {
+                document.getElementById('iframeToken').value = token;
+                loadIframe();
+            }
+        };
+    </script>
+</body>
+</html>

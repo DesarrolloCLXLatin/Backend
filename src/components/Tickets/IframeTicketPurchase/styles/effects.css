@@ -1,0 +1,126 @@
+/* src/components/tickets/IframeTicketPurchase/styles/effects.css */
+
+/* Glow Effects */
+.glow-red {
+  box-shadow: 0 0 20px rgba(253, 141, 106, 0.5);
+}
+
+.glow-orange {
+  box-shadow: 0 0 20px rgba(251, 146, 60, 0.5);
+}
+
+/* Background Gradients */
+.bg-gradient-radial {
+  background: radial-gradient(circle at center, var(--tw-gradient-from), var(--tw-gradient-to));
+}
+
+/* Particle Container */
+.particle-container {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: rgba(253, 141, 106, 0.6);
+  border-radius: 50%;
+}
+
+/* Glass Morphism */
+.glass {
+  background: rgba(31, 41, 55, 0.8);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(253, 141, 106, 0.2);
+}
+
+/* Hover Effects */
+.hover-lift {
+  transition: transform 0.3s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-4px);
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(31, 41, 55, 0.5);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(253, 141, 106, 0.5);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(253, 141, 106, 0.8);
+}
+
+/* Seat Selection Effects */
+.seat-available {
+  background: linear-gradient(to bottom, #FD8D6A, #ff6b4a);
+  box-shadow: 0 4px 6px rgba(253, 141, 106, 0.2);
+}
+
+.seat-selected {
+  background: linear-gradient(to bottom, #10b981, #059669);
+  box-shadow: 0 0 0 2px #34d399, 0 0 0 4px rgba(16, 185, 129, 0.2);
+  transform: scale(1.1);
+}
+
+.seat-sold {
+  background: #374151;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Zone Card Effects */
+.zone-card-glow {
+  position: relative;
+}
+
+.zone-card-glow::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(45deg, #FD8D6A, #ff6b4a, #FD8D6A);
+  border-radius: 1rem;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+}
+
+.zone-card-glow:hover::before {
+  opacity: 0.5;
+}
+
+.voucher-gradient {
+  background: linear-gradient(135deg, #FD8D6A 0%, #ff6b4a 100%);
+}
+
+.receipt-paper {
+  background-image: 
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(255, 255, 255, 0.03) 2px,
+      rgba(255, 255, 255, 0.03) 4px
+    );
+}
+
+.voucher-text {
+  font-family: 'Courier New', monospace;
+  letter-spacing: 0.05em;
+}
