@@ -1,170 +1,603 @@
-# Plan de Refactorización MVC - Backend Node.js
+// server/routes/tickets.js
+import express from 'express';
+import { TicketsController } from '../controllers/TicketsController.js';
+import { authenticateToken, requirePermission, requireAnyPermission, enrichUserData } from '../middleware/auth.js';
 
-## 📊 Análisis de la Estructura Actual
+const router = express.Router();
+const ticketsController = new TicketsController();
 
-### Archivos Identificados por Categoría:
+// Get tickets dashboard statistics (admin, boss)
+router.get('/stats', 
+  authenticateToken, 
+  requireAnyPermission(
+  { resource: 'tickets', action: 'manage' },
+  { resource: 'dashboard', action: 'view_boss' }
+const ticketsController = new TicketsController();
 
-#### 🗂️ **ROUTES** (Ya están bien organizados)
-- `server/routes/auth.js` ✅
-- `server/routes/runners.js` ✅
-- `server/routes/payments.js` ✅
-- `server/routes/tickets.js` ✅
-- `server/routes/dashboard.js` ✅
-- `server/routes/inventory.js` ✅
-- `server/routes/boxesRoutes.js` ✅
-- `server/routes/paymentMethods.js` ✅
-- `server/routes/corsSettings.js` ✅
-- `server/routes/exchangeRate.js` ✅
-- `server/routes/manualPayment.js` ✅
-- `server/routes/upload.js` ✅
+// ===== RUTAS USANDO CONTROLADORES =====
 
-#### 🔧 **SERVICES** (Necesitan reorganización)
-- `server/services/megasoftService.js` → `server/services/payment/MegasoftService.js`
-- `server/services/exchangeRateService.js` → `server/services/external/ExchangeRateService.js`
-- `server/services/paymentServices.js` → `server/services/payment/PaymentGatewayService.js`
-- `server/services/paymentProcessorService.js` → `server/services/payment/PaymentProcessorService.js`
+// Rutas públicas
+router.get('/payment-methods', ticketsController.getPaymentMethods);
+router.get('/inventory', ticketsController.getInventory);
 
-#### 🎛️ **CONTROLLERS** (Extraer de routes)
-- Lógica de negocio en routes debe moverse a controllers
-- Crear controllers para: Auth, Runners, Payments, Tickets, Dashboard, etc.
+// Rutas administrativas
+router.get('/stats', 
+  authenticateToken, 
+  requireAnyPermission(
+    { resource: 'tickets', action: 'manage' },
+    { resource: 'dashboard', action: 'view_boss' }
+  ), 
+  ticketsController.getStats
+);
 
-#### 📦 **MODELS** (Crear nuevos)
-- Crear modelos para interactuar con Supabase
-- Abstraer queries de base de datos
+router.get('/quick-stats', 
+  authenticateToken, 
+  enrichUserData, 
+  ticketsController.getQuickStats
+);
 
-#### 🛠️ **UTILS** (Ya organizados, mejorar)
-- `server/utils/database.js` ✅
-- `server/utils/emailService.js` ✅
-- `server/utils/ticketUtils.js` ✅
-- `server/utils/captcha.js` ✅
-- `server/utils/rateLimiter.js` ✅
+// CRUD de tickets
+router.post('/', 
+  authenticateToken, 
+  requireAnyPermission(
+    { resource: 'tickets', action: 'create' },
+    { resource: 'tickets', action: 'sell' }
+  ), 
+  ticketsController.createTickets
+);
 
-#### 🔒 **MIDDLEWARE** (Ya bien organizados)
-- `server/middleware/auth.js` ✅
-- `server/middleware/cors.js` ✅
-- `server/middleware/supabase.js` ✅
-- `server/middleware/upload.js` ✅
+router.get('/', 
+  authenticateToken, 
+  requireAnyPermission(
+    { resource: 'tickets', action: 'read' },
+    { resource: 'tickets', action: 'manage' },
+    { resource: 'payments', action: 'read' }
+  ), 
+  ticketsController.getTickets
+);
 
-## 🏗️ Estructura MVC Propuesta
+router.get('/my-tickets', 
+  authenticateToken, 
+  ticketsController.getMyTickets
+);
 
-```
-server/
-├── app.js                          # Configuración principal de Express
-├── server.js                       # Punto de entrada del servidor
-├── config/                         # Configuraciones
-│   ├── database.js                 # Configuración de Supabase
-│   ├── cors.js                     # Configuración CORS
-│   ├── raceConfig.js              # ✅ Ya existe
-│   └── email.js                   # Configuración de email
-├── controllers/                    # 🆕 CONTROLADORES
-│   ├── AuthController.js
-│   ├── RunnersController.js
-│   ├── PaymentsController.js
-│   ├── TicketsController.js
-│   ├── DashboardController.js
-│   ├── InventoryController.js
-│   ├── BoxesController.js
-│   └── UploadController.js
-├── models/                         # 🆕 MODELOS
-│   ├── User.js
-│   ├── Runner.js
-│   ├── Payment.js
-│   ├── Ticket.js
-│   ├── Inventory.js
-│   ├── Box.js
-│   └── ExchangeRate.js
-├── services/                       # 🔄 REORGANIZAR
-│   ├── payment/
-│   │   ├── MegasoftService.js
-│   │   ├── PaymentGatewayService.js
-│   │   └── PaymentProcessorService.js
-│   ├── external/
-│   │   └── ExchangeRateService.js
-│   ├── email/
-│   │   ├── EmailService.js
-│   │   └── TemplateService.js
-│   └── ticket/
-│       └── TicketService.js
-├── routes/                         # ✅ MANTENER (simplificar)
-│   ├── auth.js
-│   ├── runners.js
-│   ├── payments.js
-│   ├── tickets.js
-│   ├── dashboard.js
-│   ├── inventory.js
-│   ├── boxes.js
-│   └── upload.js
-├── middleware/                     # ✅ YA BIEN ORGANIZADOS
-├── utils/                          # ✅ MANTENER Y MEJORAR
-├── cron/                          # ✅ MANTENER
-└── scripts/                       # ✅ MANTENER
-```
+router.get('/:ticketId', 
+  authenticateToken, 
+  enrichUserData, 
+  ticketsController.getTicketDetails
+);
 
-## 🚀 Plan de Migración Progresiva (8 Fases)
+// Operaciones de tickets
+router.patch('/:ticketId/payment', 
+  authenticateToken, 
+  requireAnyPermission(
+    { resource: 'tickets', action: 'update' },
+    { resource: 'payments', action: 'confirm' }
+  ), 
+  ticketsController.updatePaymentStatus
+);
 
-### **FASE 1: Crear Estructura Base** ⭐ (Sin romper nada)
-- Crear carpetas `controllers/`, `models/`, reorganizar `services/`
-- Mantener archivos originales intactos
+router.post('/:ticketId/redeem', 
+  authenticateToken, 
+  requireAnyPermission(
+    { resource: 'tickets', action: 'update' },
+    { resource: 'tickets', action: 'sell' }
+  ), 
+  ticketsController.redeemTicket
+);
 
-### **FASE 2: Crear Modelos Base**
-- Abstraer queries de Supabase en modelos
-- Mantener compatibilidad con código existente
+router.post('/verify', 
+  authenticateToken, 
+  requireAnyPermission(
+    { resource: 'tickets', action: 'read' },
+    { resource: 'tickets', action: 'sell' }
+  ), 
+  ticketsController.verifyTicket
+);
 
-### **FASE 3: Extraer Controladores de Auth**
-- Mover lógica de `routes/auth.js` a `AuthController.js`
-- Actualizar rutas para usar controladores
+// Get store dashboard for tickets
+router.get('/store', authenticateToken, requirePermission('tickets', 'sell'), async (req, res) => {
+  try {
+    // Get tickets sold by this store user
+    const { data: storeTickets, count } = await req.supabase
+      .from('concert_tickets')
+      .select('*', { count: 'exact' })
+      .eq('sold_by', req.user.id)
+      .order('created_at', { ascending: false });
 
-### **FASE 4: Extraer Controladores de Runners**
-- Mover lógica de `routes/runners.js` a `RunnersController.js`
+    // Count by payment status
+    const statusCounts = {
+      pendiente: 0,
+      confirmado: 0,
+      rechazado: 0
+    };
 
-### **FASE 5: Extraer Controladores de Payments**
-- Mover lógica de `routes/payments.js` a `PaymentsController.js`
+    storeTickets?.forEach(ticket => {
+      if (ticket.payment_status in statusCounts) {
+        statusCounts[ticket.payment_status]++;
+      }
+    });
 
-### **FASE 6: Extraer Controladores de Tickets**
-- Mover lógica de `routes/tickets.js` a `TicketsController.js`
+    // Calculate revenue for this store
+    const TICKET_PRICE = 15.00;
+    const storeRevenue = statusCounts.confirmado * TICKET_PRICE;
 
-### **FASE 7: Reorganizar Services**
-- Mover services a subcarpetas especializadas
-- Actualizar imports
+    // Get today's sales
+    const today = new Date().toISOString().split('T')[0];
+    const todaySales = storeTickets?.filter(t => 
+      t.created_at.startsWith(today)
+    ).length || 0;
 
-### **FASE 8: Optimización Final**
-- Limpiar código duplicado
-- Optimizar imports y dependencias
+    // Get this week's sales
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+    
+    const weekSales = storeTickets?.filter(t => 
+      new Date(t.created_at) >= weekStart
+    ).length || 0;
 
-## ✅ Checklist de Validación
+    // Get inventory status
+    const { data: inventory } = await req.supabase
+      .from('ticket_inventory')
+      .select('*')
+      .single();
 
-### Después de cada fase:
-- [ ] `npm run server:dev` inicia sin errores
-- [ ] Todas las rutas responden correctamente
-- [ ] Tests de endpoints críticos pasan
-- [ ] No hay imports rotos
-- [ ] Logs no muestran errores de dependencias
+    res.json({
+      totalSales: count || 0,
+      confirmedSales: statusCounts.confirmado,
+      pendingSales: statusCounts.pendiente,
+      rejectedSales: statusCounts.rechazado,
+      
+      // Revenue
+      storeRevenueUSD: storeRevenue,
+      ticketPrice: TICKET_PRICE,
+      
+      // Time-based stats
+      todaySales,
+      weekSales,
+      
+      // Inventory status
+      availableTickets: inventory?.available_tickets || 0,
+      
+      // Recent sales (últimos 20 tickets)
+      recentTickets: storeTickets?.slice(0, 20).map(t => ({
+        id: t.id,
+        ticket_number: t.ticket_number,
+        buyer_name: t.buyer_name,
+        buyer_email: t.buyer_email,
+        payment_status: t.payment_status,
+        payment_method: t.payment_method,
+        created_at: t.created_at
+      })) || []
+    });
 
-### Tests específicos:
-```bash
-# Test de endpoints críticos
-curl http://localhost:30500/api/health
-curl http://localhost:30500/api/auth/verify
-curl http://localhost:30500/api/runners
-curl http://localhost:30500/api/tickets/inventory
-```
+  } catch (error) {
+    console.error('Store tickets dashboard error:', error);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
 
-## 🎯 Beneficios Esperados
+    const { data: currentTicket } = await req.supabase
+      .from('concert_tickets')
+      .select('*')
+      .eq('id', ticketId)
+      .single();
 
-1. **Separación de Responsabilidades**: Lógica de negocio separada de rutas
-2. **Reutilización**: Controladores y servicios reutilizables
-3. **Testabilidad**: Cada componente es testeable independientemente
-4. **Mantenibilidad**: Código más fácil de mantener y extender
-5. **Escalabilidad**: Estructura preparada para crecimiento
+    if (!currentTicket) {
+      return res.status(404).json({ message: 'Entrada no encontrada' });
+    }
 
-## 📝 Notas Importantes
+    const updateData = {
+      payment_status,
+      payment_reference: payment_reference || null,
+      notes
+    };
 
-- **NO eliminar archivos existentes** hasta confirmar que todo funciona
-- **Mantener imports existentes** durante la transición
-- **Usar alias de imports** para facilitar la migración
-- **Validar cada paso** antes de continuar al siguiente
-- **Hacer backup** antes de cada fase mayor
+    // If confirming payment
+    if (payment_status === 'confirmado' && currentTicket.payment_status !== 'confirmado') {
+      updateData.confirmed_by = req.user.id;
+      updateData.confirmed_at = new Date().toISOString();
 
----
+      // Convert reservation to sale
+      await req.supabase.rpc('confirm_ticket_sale', { quantity: 1 });
+    }
 
-¿Quieres que comience con la **FASE 1** creando la estructura base?
+    // Update ticket
+    const { data: ticket, error } = await req.supabase
+      .from('concert_tickets')
+      .update(updateData)
+      .eq('id', ticketId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating ticket:', error);
+      return res.status(500).json({ 
+        message: 'Error al actualizar entrada' 
+      });
+    }
+
+    // Create/update payment record
+    if (payment_status === 'confirmado') {
+      await req.supabase
+        .from('ticket_payments')
+        .upsert({
+          ticket_id: ticketId,
+          payment_method: ticket.payment_method,
+          payment_reference,
+          status: 'confirmado',
+          confirmed_by: req.user.id,
+          confirmed_at: new Date().toISOString(),
+          notes
+        });
+
+      // Send email if not already sent
+      if (!ticket.receipt_sent) {
+        try {
+          const receiptBuffer = await generateTicketReceipt(ticket);
+          await sendTicketEmail(ticket.buyer_email, ticket.buyer_name, [ticket], receiptBuffer);
+          
+          // Mark receipt as sent
+          await req.supabase
+            .from('concert_tickets')
+            .update({ receipt_sent: true })
+            .eq('id', ticketId);
+        } catch (emailError) {
+          console.error('Error sending ticket email:', emailError);
+        }
+      }
+    }
+
+    res.json({
+      message: 'Estado de pago actualizado',
+      ticket
+    });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
+
+// Redeem ticket (admin, boss, tienda)
+router.post('/:ticketId/redeem', authenticateToken, requireAnyPermission(
+  { resource: 'tickets', action: 'update' },
+  { resource: 'tickets', action: 'sell' }
+), async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+
+    // Get ticket
+    const { data: ticket, error: fetchError } = await req.supabase
+      .from('concert_tickets')
+      .select('*')
+      .eq('id', ticketId)
+      .single();
+
+    if (fetchError || !ticket) {
+      return res.status(404).json({ message: 'Entrada no encontrada' });
+    }
+
+    // Check if already redeemed
+    if (ticket.ticket_status === 'canjeado') {
+      return res.status(400).json({ 
+        message: 'Esta entrada ya fue canjeada',
+        redeemed_at: ticket.redeemed_at
+      });
+    }
+
+    // Check if payment is confirmed
+    if (ticket.payment_status !== 'confirmado') {
+      return res.status(400).json({ 
+        message: 'No se puede canjear una entrada sin pago confirmado' 
+      });
+    }
+
+    // Update ticket status
+    const { data: updatedTicket, error: updateError } = await req.supabase
+      .from('concert_tickets')
+      .update({
+        ticket_status: 'canjeado',
+        redeemed_at: new Date().toISOString(),
+        redeemed_by: req.user.id
+      })
+      .eq('id', ticketId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Error redeeming ticket:', updateError);
+      return res.status(500).json({ 
+        message: 'Error al canjear entrada' 
+      });
+    }
+
+    res.json({
+      message: 'Entrada canjeada exitosamente',
+      ticket: updatedTicket
+    });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
+
+// Verify ticket by QR or barcode
+router.post('/verify', authenticateToken, requireAnyPermission(
+  { resource: 'tickets', action: 'read' },
+  { resource: 'tickets', action: 'sell' }
+), async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({ 
+        message: 'Código es requerido' 
+      });
+    }
+
+    // Search ticket by QR or barcode
+    const { data: ticket, error } = await req.supabase
+      .from('concert_tickets')
+      .select('*')
+      .or(`qr_code.eq.${code},barcode.eq.${code}`)
+      .single();
+
+    if (error || !ticket) {
+      return res.status(404).json({ 
+        message: 'Entrada no encontrada',
+        valid: false 
+      });
+    }
+
+    const response = {
+      valid: ticket.payment_status === 'confirmado' && ticket.ticket_status !== 'cancelado',
+      ticket: {
+        id: ticket.id,
+        ticket_number: ticket.ticket_number,
+        buyer_name: ticket.buyer_name,
+        payment_status: ticket.payment_status,
+        ticket_status: ticket.ticket_status,
+        redeemed_at: ticket.redeemed_at
+      }
+    };
+
+    // Add warning if already redeemed
+    if (ticket.ticket_status === 'canjeado') {
+      response.warning = 'Esta entrada ya fue canjeada';
+      response.redeemed_at = ticket.redeemed_at;
+    }
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
+
+// Resend ticket email - accesible por todos los usuarios autenticados
+router.post('/:ticketId/resend-email', authenticateToken, enrichUserData, async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+
+    // Get ticket
+    const { data: ticket, error } = await req.supabase
+      .from('concert_tickets')
+      .select('*')
+      .eq('id', ticketId)
+      .single();
+
+    if (error || !ticket) {
+      return res.status(404).json({ message: 'Entrada no encontrada' });
+    }
+
+    // Check permissions
+    const hasManagePermission = req.user.permissions.some(p => 
+      ['tickets:manage', 'tickets:sell'].includes(p)
+    );
+
+    if (!hasManagePermission && ticket.buyer_email !== req.user.email) {
+      return res.status(403).json({ 
+        message: 'No tienes permisos para reenviar esta entrada' 
+      });
+    }
+
+    // Only send confirmed tickets
+    if (ticket.payment_status !== 'confirmado') {
+      return res.status(400).json({ 
+        message: 'Solo se pueden enviar entradas confirmadas' 
+      });
+    }
+
+    // Send email
+    try {
+      const receiptBuffer = await generateTicketReceipt(ticket);
+      await sendTicketEmail(ticket.buyer_email, ticket.buyer_name, [ticket], receiptBuffer);
+      
+      // Update receipt sent status
+      await req.supabase
+        .from('concert_tickets')
+        .update({ receipt_sent: true })
+        .eq('id', ticketId);
+
+      res.json({
+        message: 'Email enviado exitosamente',
+        sent_to: ticket.buyer_email
+      });
+    } catch (emailError) {
+      console.error('Error sending email:', emailError);
+      res.status(500).json({ 
+        message: 'Error al enviar email',
+        error: emailError.message 
+      });
+    }
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
+
+// Get charts data for tickets (admin, boss)
+router.get('/charts', authenticateToken, requireAnyPermission(
+  { resource: 'tickets', action: 'manage' },
+  { resource: 'dashboard', action: 'view_boss' }
+), async (req, res) => {
+  try {
+    const { days = 30 } = req.query;
+    
+    // Get tickets for the period
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(days));
+    
+    const { data: tickets } = await req.supabase
+      .from('concert_tickets')
+      .select('created_at, payment_status, payment_method')
+      .gte('created_at', startDate.toISOString());
+
+    // Group by day
+    const dailySales = {};
+    const today = new Date();
+    for (let i = parseInt(days) - 1; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      dailySales[dateStr] = {
+        date: dateStr,
+        total: 0,
+        confirmed: 0,
+        pending: 0
+      };
+    }
+
+    tickets?.forEach(ticket => {
+      const dateStr = ticket.created_at.split('T')[0];
+      if (dailySales[dateStr]) {
+        dailySales[dateStr].total++;
+        if (ticket.payment_status === 'confirmado') {
+          dailySales[dateStr].confirmed++;
+        } else if (ticket.payment_status === 'pendiente') {
+          dailySales[dateStr].pending++;
+        }
+      }
+    });
+
+    // Payment methods distribution
+    const methodCount = {};
+    tickets?.forEach(ticket => {
+      if (ticket.payment_status === 'confirmado') {
+        methodCount[ticket.payment_method] = (methodCount[ticket.payment_method] || 0) + 1;
+      }
+    });
+
+    // Hourly distribution (for today)
+    const todayStr = new Date().toISOString().split('T')[0];
+    const { data: todayTickets } = await req.supabase
+      .from('concert_tickets')
+      .select('created_at')
+      .gte('created_at', todayStr);
+
+    const hourlyDistribution = Array(24).fill(0);
+    todayTickets?.forEach(ticket => {
+      const hour = new Date(ticket.created_at).getHours();
+      hourlyDistribution[hour]++;
+    });
+
+    res.json({
+      dailySales: Object.values(dailySales),
+      paymentMethods: methodCount,
+      hourlyDistribution: hourlyDistribution.map((count, hour) => ({
+        hour: `${hour}:00`,
+        sales: count
+      })),
+      chartData: {
+        daily: Object.values(dailySales)
+      }
+    });
+
+  } catch (error) {
+    console.error('Charts data error:', error);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
+
+// Quick stats for tickets - accesible por todos los usuarios autenticados
+router.get('/quick-stats', authenticateToken, enrichUserData, async (req, res) => {
+  try {
+    let stats = {};
+    const userPermissions = req.user.permissions || [];
+
+    if (userPermissions.some(p => ['tickets:manage', 'dashboard:view_boss'].includes(p))) {
+      // Admin/Boss sees global tickets stats
+      const { data: inventory } = await req.supabase
+        .from('ticket_inventory')
+        .select('*')
+        .single();
+
+      const { count: pendingTickets } = await req.supabase
+        .from('concert_tickets')
+        .select('*', { count: 'exact', head: true })
+        .eq('payment_status', 'pendiente');
+
+      const { count: todaySales } = await req.supabase
+        .from('concert_tickets')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', new Date().toISOString().split('T')[0]);
+
+      stats = {
+        availableTickets: inventory?.available_tickets || 0,
+        soldTickets: inventory?.sold_tickets || 0,
+        pendingTickets: pendingTickets || 0,
+        todaySales: todaySales || 0,
+        capacity: inventory?.total_tickets || 5000
+      };
+
+    } else if (userPermissions.includes('tickets:sell')) {
+      // Store sees their tickets stats
+      const { count: storeSales } = await req.supabase
+        .from('concert_tickets')
+        .select('*', { count: 'exact', head: true })
+        .eq('sold_by', req.user.id);
+
+      const { count: todayStoreSales } = await req.supabase
+        .from('concert_tickets')
+        .select('*', { count: 'exact', head: true })
+        .eq('sold_by', req.user.id)
+        .gte('created_at', new Date().toISOString().split('T')[0]);
+
+      stats = {
+        totalSales: storeSales || 0,
+        todaySales: todayStoreSales || 0
+      };
+
+    } else {
+      // Regular user sees their tickets
+      const { count: myTickets } = await req.supabase
+        .from('concert_tickets')
+        .select('*', { count: 'exact', head: true })
+        .eq('buyer_email', req.user.email);
+
+      const { count: pendingPayments } = await req.supabase
+        .from('concert_tickets')
+        .select('*', { count: 'exact', head: true })
+        .eq('buyer_email', req.user.email)
+        .eq('payment_status', 'pendiente');
+
+      stats = {
+        myTickets: myTickets || 0,
+        pendingPayments: pendingPayments || 0
+      };
+    }
+
+    res.json(stats);
+
+  } catch (error) {
+    console.error('Quick stats error:', error);
+    res.status(500).json({ message: 'Error interno del servidor' });
+  }
+});
+
+export default router;
